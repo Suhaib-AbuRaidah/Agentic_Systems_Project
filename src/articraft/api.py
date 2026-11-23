@@ -24,7 +24,7 @@ from articraft.agent.provider.anthropic import anthropic_api_key_value
 from articraft.agent.workspace import LocalWorkspace
 from articraft.settings import Settings, get_settings
 
-Provider = Literal["openai", "gemini", "anthropic", "openrouter"]
+Provider = Literal["openai", "gemini", "anthropic", "openrouter", "deepseek"]
 GenerationStatus = Literal["success", "error"]
 Event = events.Event
 EventHandler = Callable[[Event], None]
@@ -175,7 +175,12 @@ def _resolved_settings(
         for key, value in (
             ("provider", provider),
             ("output_dir", output_dir),
-            ("openai_reasoning_effort", effort),
+            (
+                "deepseek_reasoning_effort"
+                if selected_provider == "deepseek"
+                else "openai_reasoning_effort",
+                effort,
+            ),
             ("compile_timeout_seconds", compile_timeout),
             # The CLI flag only turns the lane on; leaving it off preserves
             # the environment or .env setting.
@@ -189,6 +194,7 @@ def _resolved_settings(
             "gemini": "gemini_model",
             "openai": "openai_model",
             "openrouter": "openrouter_model",
+            "deepseek": "deepseek_model",
         }[selected_provider]
         updates[model_key] = model
 
@@ -198,6 +204,13 @@ def _resolved_settings(
 
 
 def _missing_provider_settings(settings: Settings) -> list[str]:
+    if settings.provider == "deepseek":
+        missing = []
+        if not (settings.deepseek_api_key or "").strip():
+            missing.append("DEEPSEEK_API_KEY")
+        if not settings.deepseek_model.strip():
+            missing.append("ARTICRAFT_DEEPSEEK_MODEL or --model")
+        return missing
     if settings.provider == "openrouter":
         missing = []
         if not (settings.openrouter_api_key or "").strip():

@@ -1,6 +1,6 @@
 # Model providers
 
-Articraft supports OpenAI, Anthropic, Gemini, and OpenRouter. OpenAI is the default.
+Articraft supports OpenAI, Anthropic, Gemini, OpenRouter, and direct DeepSeek. OpenAI is the default.
 
 ## Configure a provider
 
@@ -12,6 +12,7 @@ Set the API key for the provider that you want to use:
 | Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5` | Yes |
 | Gemini | `GEMINI_API_KEY` | `gemini-3.6-flash` | Yes |
 | OpenRouter | `OPENROUTER_API_KEY` | `nvidia/nemotron-3-ultra-550b-a55b:free` | No |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-flash` | Yes, Flash only |
 
 You can put the key in `.env` or set it for one command. Do not commit API keys.
 
@@ -89,6 +90,38 @@ The model's maximum output size is separate from its context window. If it is be
 This setting defaults to 8192 and must be positive. It caps summary requests only.
 A smaller limit requested by the agent is still respected. It does not change ordinary
 generation requests.
+
+## Use DeepSeek directly
+
+Create a [DeepSeek API key](https://platform.deepseek.com/api_keys) and add it to `.env`:
+
+```dotenv
+DEEPSEEK_API_KEY=your_deepseek_key
+ARTICRAFT_PROVIDER=deepseek
+ARTICRAFT_DEEPSEEK_MODEL=deepseek-flash
+```
+
+```shell
+uv run articraft --no-tui --provider deepseek --model deepseek-flash \
+  --effort high "Create an articulated desk lamp with two adjustable hinges."
+```
+
+Requests go directly to `https://api.deepseek.com/chat/completions`.
+Reasoning defaults to `high`. Other effort levels are `low`, `max`, and `none`.
+Flash accepts reference and tool images. `deepseek-v4-pro` accepts text only.
+See the [model docs](https://api-docs.deepseek.com/quick_start/pricing/).
+
+| Setting | Default |
+| --- | --- |
+| `ARTICRAFT_DEEPSEEK_REASONING_EFFORT` | `high` |
+| `ARTICRAFT_DEEPSEEK_MAX_OUTPUT_TOKENS` | `32768` |
+| `ARTICRAFT_DEEPSEEK_CONTEXT_WINDOW_TOKENS` | `1000000` (`0` disables compaction) |
+| `ARTICRAFT_DEEPSEEK_MAX_ATTEMPTS` | `4` |
+| `ARTICRAFT_DEEPSEEK_REQUEST_TIMEOUT_SECONDS` | `900` |
+
+Tool turns preserve reasoning continuity. Summaries disable thinking and use at most 8192 output tokens.
+Transient failures are retried. Authentication failures and truncated responses stop the request.
+Records include cache-token usage. Dollar costs are unestimated, so zero recorded cost does not mean free usage.
 
 ## Use the Python API
 

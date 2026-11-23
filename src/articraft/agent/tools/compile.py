@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -32,7 +33,12 @@ async def run(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         context.consecutive_compile_failures = 0
         return _compact_result(context.successful_compile_result)
 
+    print("[articraft] Compiling current geometry and running checks", file=sys.stderr, flush=True)
     result = await _compile_path(context)
+    for line in str(result.get("stderr", "")).splitlines():
+        if line.startswith("[trajectory]"):
+            print(line, file=sys.stderr, flush=True)
+    print(f"[articraft] Compile feedback ready: {result['status']}", file=sys.stderr, flush=True)
     internal_result = _internal_result(context, result)
     context.compile_result = internal_result
     if result["status"] == "success":

@@ -4,7 +4,7 @@ from functools import cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_OUTPUT_DIR = Path("runs")
@@ -23,6 +23,7 @@ DEFAULT_GEMINI_REQUEST_TIMEOUT_SECONDS = 900.0
 DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 DEFAULT_OPENROUTER_MAX_ATTEMPTS = 4
 DEFAULT_OPENROUTER_REQUEST_TIMEOUT_SECONDS = 900.0
+DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
 
 
 class Settings(BaseSettings):
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
         default=DEFAULT_OUTPUT_DIR,
         validation_alias="ARTICRAFT_OUTPUT_DIR",
     )
-    provider: Literal["openai", "gemini", "anthropic", "openrouter"] = Field(
+    provider: Literal["openai", "gemini", "anthropic", "openrouter", "deepseek"] = Field(
         default=DEFAULT_PROVIDER,
         validation_alias="ARTICRAFT_PROVIDER",
     )
@@ -125,13 +126,33 @@ class Settings(BaseSettings):
         validation_alias="ARTICRAFT_OPENROUTER_SUMMARY_MAX_OUTPUT_TOKENS",
     )
 
-    @field_validator("openrouter_context_window_tokens")
+    deepseek_model: str = Field(
+        default=DEFAULT_DEEPSEEK_MODEL, validation_alias="ARTICRAFT_DEEPSEEK_MODEL"
+    )
+    deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
+    deepseek_reasoning_effort: Literal["none", "low", "high", "max"] = Field(
+        default="high", validation_alias="ARTICRAFT_DEEPSEEK_REASONING_EFFORT"
+    )
+    deepseek_max_attempts: int = Field(
+        default=4, ge=1, validation_alias="ARTICRAFT_DEEPSEEK_MAX_ATTEMPTS"
+    )
+    deepseek_request_timeout_seconds: float = Field(
+        default=900.0, gt=0, validation_alias="ARTICRAFT_DEEPSEEK_REQUEST_TIMEOUT_SECONDS"
+    )
+    deepseek_max_output_tokens: int = Field(
+        default=32_768, ge=1, validation_alias="ARTICRAFT_DEEPSEEK_MAX_OUTPUT_TOKENS"
+    )
+    deepseek_context_window_tokens: int = Field(
+        default=1_000_000, ge=0, validation_alias="ARTICRAFT_DEEPSEEK_CONTEXT_WINDOW_TOKENS"
+    )
+
+    @field_validator("openrouter_context_window_tokens", "deepseek_context_window_tokens")
     @classmethod
-    def _openrouter_window_floor(cls, value: int) -> int:
+    def _context_window_floor(cls, value: int, info: ValidationInfo) -> int:
         """Reject windows below RESERVE_TOKENS + KEEP_RECENT_TOKENS: they look set but never protect."""
         if 0 < value < 36_384:
             raise ValueError(
-                "ARTICRAFT_OPENROUTER_CONTEXT_WINDOW_TOKENS must be 0 (disabled) or at least 36384"
+                f"ARTICRAFT_{str(info.field_name).upper()} must be 0 (disabled) or at least 36384"
             )
         return value
 
@@ -156,6 +177,8 @@ class Settings(BaseSettings):
 
     @property
     def selected_model(self) -> str:
+        if self.provider == "deepseek":
+            return self.deepseek_model
         if self.provider == "openrouter":
             return self.openrouter_model
         if self.provider == "anthropic":
@@ -166,6 +189,8 @@ class Settings(BaseSettings):
 
     @property
     def selected_reasoning_effort(self) -> str:
+        if self.provider == "deepseek":
+            return self.deepseek_reasoning_effort
         if self.provider == "openai":
             return self.openai_reasoning_effort
         return ""

@@ -34,9 +34,21 @@ def test_settings_ignore_local_dotenv_by_default_in_tests(tmp_path, monkeypatch)
     assert Settings().max_turns == DEFAULT_MAX_TURNS  # pyright: ignore[reportCallIssue]
 
 
-def test_openrouter_context_window_rejects_values_too_small_to_protect() -> None:
+@pytest.mark.parametrize(
+    "field", ["openrouter_context_window_tokens", "deepseek_context_window_tokens"]
+)
+def test_context_window_rejects_values_too_small_to_protect(field: str) -> None:
     with pytest.raises(ValidationError, match="36384"):
-        Settings(openrouter_context_window_tokens=32_768)  # pyright: ignore[reportCallIssue]
+        Settings.model_validate({field: 32_768})
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["deepseek_max_attempts", "deepseek_max_output_tokens", "deepseek_request_timeout_seconds"],
+)
+def test_deepseek_limits_must_be_positive(field: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({field: 0})
 
 
 def test_openrouter_context_window_accepts_zero_and_the_minimum() -> None:

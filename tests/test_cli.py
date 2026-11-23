@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, ClassVar
 
+import pytest
 from typer.testing import CliRunner
 
 from articraft import api, app
@@ -394,6 +395,59 @@ def test_cli_selects_openrouter_provider_with_arbitrary_model(monkeypatch, tmp_p
     assert settings.selected_model == "vendor/new-model"
 
 
+def test_cli_selects_direct_deepseek_model_and_effort(monkeypatch, tmp_path: Path) -> None:
+    reset_fakes()
+    monkeypatch.setattr(api, "create_model", FakeOpenAIModel)
+    monkeypatch.setattr(api, "LocalWorkspace", FakeEnvironment)
+    monkeypatch.setattr(api, "Agent", FakeAgent)
+    monkeypatch.setattr(app, "get_settings", lambda: Settings(deepseek_api_key="deepseek-key"))
+
+    result = CliRunner().invoke(
+        app.cli,
+        [
+            "generate",
+            "make a hinge",
+            "--provider",
+            "deepseek",
+            "--model",
+            "deepseek-flash",
+            "--effort",
+            "low",
+            "--no-tui",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    settings = FakeOpenAIModel.instances[0].settings
+    assert settings.provider == "deepseek"
+    assert settings.selected_model == "deepseek-flash"
+    assert settings.selected_reasoning_effort == "low"
+
+
+def test_cli_reports_missing_deepseek_key(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    result = CliRunner().invoke(
+        app.cli,
+        [
+            "generate",
+            "make a hinge",
+            "--provider",
+            "deepseek",
+            "--no-tui",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "DEEPSEEK_API_KEY" in result.output
+    assert "OPENAI_API_KEY" not in result.output
+    assert "Traceback" not in result.output
+
+
 def test_cli_warns_on_missing_required_settings(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
@@ -555,25 +609,27 @@ def test_cli_replay_missing_run_exits_nonzero(tmp_path: Path) -> None:
     assert "no conversation log" in result.output
 
 
-def test_cli_view_opens_resolved_run(monkeypatch, tmp_path: Path) -> None:
-    viewed: list[Path] = []
+@pytest.mark.parametrize("play_trajectory", [False, True])
+def test_cli_view_opens_resolved_run(monkeypatch, tmp_path: Path, play_trajectory: bool) -> None:
+    viewed: list[tuple[Path, bool]] = []
 
-    def view_run(run_dir: Path) -> None:
-        viewed.append(run_dir)
+    def view_run(run_dir: Path, *, play_trajectory: bool = False) -> None:
+        viewed.append((run_dir, play_trajectory))
 
     monkeypatch.setattr(app, "serve_viewer", view_run)
 
     result = CliRunner().invoke(
         app.cli,
-        ["view", "run-demo", "--output-dir", str(tmp_path)],
+        ["view", "run-demo", "--output-dir", str(tmp_path)]
+        + (["--play-trajectory"] if play_trajectory else []),
     )
 
     assert result.exit_code == 0
-    assert viewed == [tmp_path / "run-demo"]
+    assert viewed == [(tmp_path / "run-demo", play_trajectory)]
 
 
 def test_cli_view_reports_invalid_run(monkeypatch, tmp_path: Path) -> None:
-    def fail(_run_dir: Path) -> None:
+    def fail(_run_dir: Path, *, play_trajectory: bool = False) -> None:
         raise ValueError("no USDZ outputs")
 
     monkeypatch.setattr(app, "serve_viewer", fail)

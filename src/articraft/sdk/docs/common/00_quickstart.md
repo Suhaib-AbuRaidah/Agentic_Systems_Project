@@ -87,6 +87,7 @@ Read only the reference that applies to your next task:
 - Read `docs/sdk/common/37_materials.md` for materials and mass.
 - Read `docs/sdk/common/38_simulation_settings.md` for gravity and initial motion.
 - Read `docs/sdk/common/40_testing.md` for checks and geometry inspection.
+- For explicit end-effector trajectories, read `docs/sdk/common/42_trajectory_synthesis.md`.
 - Visual views and report artifacts: `docs/sdk/common/45_visual_evidence.md`.
 - Read `docs/sdk/common/50_usdz_export.md` for USDZ output.
 - Read `docs/sdk/mesh/00_mesh_geometry.md` for mesh editing and solid builders.
@@ -96,8 +97,9 @@ Read only the reference that applies to your next task:
 - Read `docs/sdk/mesh/40_booleans_and_shells.md` for booleans, shells, and welds.
 - Read `docs/sdk/mesh/50_refinement_and_smoothing.md` for mesh refinement.
 
-The detailed build123d pages are under `docs/sdk/build123d/`. Their examples use arbitrary
-dimensions, so convert all dimensions to meters.
+Build123d primitives: `docs/sdk/build123d/objects.md`. Operations: `docs/sdk/build123d/operations.md`.
+Discover other filenames with `ls docs/sdk/build123d/`. Use exact names, without adding numbered prefixes.
+Build123d examples use arbitrary dimensions. Convert them to meters.
 
 Read only the example that is closest to your task:
 

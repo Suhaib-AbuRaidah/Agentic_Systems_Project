@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import re
+import sys
 import time
 from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime
@@ -207,6 +208,7 @@ class Agent:
         termination_error = ""
         consecutive_empty_responses = 0
         for turn in range(1, self.config.max_turns + 1):
+            print(f"[articraft] Turn {turn}: preparing model request", file=sys.stderr, flush=True)
             self._emit(events.TurnStarted(turn))
             summarizer = self.model if isinstance(self.model, ContextSummarizer) else None
             plan = (
@@ -238,6 +240,11 @@ class Agent:
                 )
                 self._emit(events.ContextCompacted(plan.tokens_before))
             try:
+                print(
+                    "[articraft] Sending conversation and tool feedback to LLM",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 response = await self.model.query(self.messages, tools=tool_schemas)
             except Exception as exc:
                 termination_error = f"model query failed: {type(exc).__name__}: {exc}"
@@ -392,6 +399,11 @@ class Agent:
 
         started = []
         for call in tool_calls:
+            print(
+                f"[articraft] Tool started: {_tool_label(call)} ({call['id']})",
+                file=sys.stderr,
+                flush=True,
+            )
             self._emit(
                 events.ToolStarted(
                     str(call["id"]), str(call["name"]), str(call.get("arguments") or "{}")
@@ -407,6 +419,29 @@ class Agent:
             strict=True,
         ):
             self.messages.append(item)
+            outcome = (
+                "error"
+                if "error" in payload
+                else str(payload.get("result", {}).get("status", "completed"))
+            )
+            elapsed = round(time.perf_counter() - tool_started, 4)
+            print(
+                f"[articraft] Tool finished: {_tool_label(call)} "
+                f"({call['id']}, {outcome}, {elapsed:.2f}s); feedback added to conversation",
+                file=sys.stderr,
+                flush=True,
+            )
+            result = payload.get("result", {})
+            error = payload.get("error") or result.get("error")
+            if outcome == "error" and call["name"] == "compile":
+                error = error or result.get("compile_signals")
+            if error:
+                detail = " ".join(str(error).split())[:2000]
+                print(
+                    f"[articraft] Tool error: {_tool_label(call)} ({call['id']}): {detail}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             append_conversation(
                 conversation_path,
                 tools.result_item(str(call["id"]), payload),
@@ -416,7 +451,7 @@ class Agent:
                     str(call["id"]),
                     str(call["name"]),
                     _display_payload(context, str(call["name"]), payload),
-                    round(time.perf_counter() - tool_started, 4),
+                    elapsed,
                 )
             )
 
@@ -521,6 +556,31 @@ def _create_run(
             return candidate, workspace.create_run(candidate)
         except FileExistsError:
             attempt += 1
+
+
+def _tool_label(call: dict[str, Any]) -> str:
+    """Identify a tool's target without printing file contents or stdin data."""
+    name = str(call["name"])
+    try:
+        args = _arguments(call)
+    except (TypeError, ValueError):
+        return name
+    target = ""
+    if name in {"read", "write", "edit", "view_image"}:
+        target = str(args.get("path") or "")
+    elif name == "synthesize_trajectory":
+        target = str(args.get("task_path") or "")
+    elif name == "exec_command":
+        lines = str(args.get("command") or "").splitlines()
+        target = lines[0] if lines else ""
+    elif name == "write_stdin":
+        target = f"session={args.get('session_id')}"
+    elif name == "compile":
+        target = "workspace"
+    target = " ".join(target.split())
+    if len(target) > 200:
+        target = target[:197] + "..."
+    return f"{name} {target}" if target else name
 
 
 def _arguments(call: dict[str, Any]) -> dict[str, Any]:

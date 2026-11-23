@@ -25,6 +25,7 @@ from articraft.settings import Settings, get_settings
         ("openai", "gpt-future-preview", "openai_model"),
         ("gemini", "gemini-future-preview", "gemini_model"),
         ("anthropic", "claude-future-preview", "anthropic_model"),
+        ("deepseek", "deepseek-flash", "deepseek_model"),
     ],
 )
 def test_resolved_settings_routes_model_to_selected_provider(
@@ -48,6 +49,15 @@ def test_resolved_settings_validates_overrides(tmp_path: Path) -> None:
     assert settings.compile_timeout_seconds == 2.5
     with pytest.raises(ValidationError, match="greater than 0"):
         api._resolved_settings(base, compile_timeout=0)
+
+
+def test_resolved_settings_routes_deepseek_effort_without_changing_openai() -> None:
+    base = Settings(openai_reasoning_effort="high", deepseek_api_key="deepseek-key")
+    settings = api._resolved_settings(base, provider="deepseek", effort="low")
+    assert settings.selected_reasoning_effort == "low"
+    assert settings.openai_reasoning_effort == "high"
+    with pytest.raises(ValidationError):
+        api._resolved_settings(base, provider="deepseek", effort="invalid")
 
 
 def test_resolved_settings_rejects_unknown_provider() -> None:

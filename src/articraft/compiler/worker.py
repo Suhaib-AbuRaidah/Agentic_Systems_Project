@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -182,6 +183,8 @@ def _compile_workspace(
     captured_stdout = io.StringIO()
     captured_stderr = io.StringIO()
     result = CompileResult()
+    trajectory_preview = export_dir / ".trajectory-preview.json"
+    trajectory_preview.unlink(missing_ok=True)
 
     previous_cwd = Path.cwd()
     sys.path.insert(0, str(workspace))
@@ -205,6 +208,34 @@ def _compile_workspace(
                 tracker=tracker,
                 physics_enabled=physics_enabled,
             )
+            request_path = workspace.parent / "trajectory_request.json"
+            if request_path.is_file():
+                with tracker.phase("verifying rebuilt end-effector trajectory"):
+                    from articraft.sdk.trajectory import verify_trajectory
+
+                    request = json.loads(request_path.read_text())
+                    task_path = (workspace / request["task"]).resolve()
+                    output_path = (workspace / request["output"]).resolve()
+                    task_path.relative_to(workspace.resolve())
+                    output_path.relative_to(workspace.resolve())
+                    if (
+                        "trajectory_base" not in globals_dict
+                        or "trajectory_tip" not in globals_dict
+                    ):
+                        raise ValueError(
+                            "After synthesis, main.py must define trajectory_base (a rigid body) "
+                            "and trajectory_tip (a BodyFrame) from the rebuilt geometry"
+                        )
+                    trajectory_ctx = TestContext(object_model)
+                    verify_trajectory(
+                        trajectory_ctx,
+                        task_path,
+                        output_path,
+                        base=globals_dict["trajectory_base"],
+                        tip=globals_dict["trajectory_tip"],
+                        preview_path=trajectory_preview,
+                    )
+                    baseline_report = _merge_test_reports(baseline_report, trajectory_ctx.report())
             test_report = _merge_test_reports(authored_report, baseline_report)
             result.test_report = _serialize_test_report(
                 test_report,
@@ -214,6 +245,24 @@ def _compile_workspace(
                 export_result = export_assembly(object_model, export_dir)
             result.manifest = str(export_result.manifest)
             result.usdz = str(export_result.usdz)
+            if trajectory_preview.is_file():
+                trajectory = json.loads(trajectory_preview.read_text(encoding="utf-8"))
+                trajectory["usdz_sha256"] = hashlib.sha256(
+                    export_result.usdz.read_bytes()
+                ).hexdigest()
+                trajectory_dir = export_dir / "trajectories"
+                trajectory_dir.mkdir(exist_ok=True)
+                destination = trajectory_dir / f"{export_result.usdz.stem}.json"
+                temporary = destination.with_suffix(".tmp")
+                temporary.write_text(
+                    json.dumps(trajectory, allow_nan=False) + "\n", encoding="utf-8"
+                )
+                temporary.replace(destination)
+                print(
+                    f"[trajectory] Saved viewer trajectory: {destination}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             audit = export_result.audit
             audit_metrics = (
                 TestMetric("export body count", float(audit.rigid_body_count), unit="count"),
@@ -251,6 +300,7 @@ def _compile_workspace(
         result.traceback = traceback.format_exc()
         result.test_report = serialized_test_report
     finally:
+        trajectory_preview.unlink(missing_ok=True)
         os.chdir(previous_cwd)
         if sys.path and sys.path[0] == str(workspace):
             sys.path.pop(0)

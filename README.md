@@ -49,7 +49,7 @@ Pass one local image when you want Articraft to reconstruct an object:
 uv run articraft --image reference.png "reconstruct this desk lamp"
 ```
 
-OpenAI, Anthropic, and Gemini accept reference images. OpenRouter accepts text only.
+OpenAI, Anthropic, Gemini, and DeepSeek Flash accept reference images. OpenRouter accepts text only.
 
 ## Use the Python API
 
@@ -83,9 +83,29 @@ uv run articraft simulate runs/<run-id>
 The simulator can also test sliding friction and released joints. Read the
 [simulation guide](docs/simulation.md) for the commands and result definitions.
 
+## Request an end-effector trajectory
+
+Specify the TCP equation, interval, coordinate frame, units, tolerances, and any orientation target:
+
+```shell
+uv run articraft "Create a serial articulated arm whose tip follows x=0.3+0.1*cos(t), y=0.1*sin(t), z=0.2 metres in its base frame, for t from 0 to 2*pi, within 1 mm."
+```
+
+The agent defines a functional TCP, optimizes dimensions and joint motion, then rebuilds and verifies the geometry.
+See the [task reference](src/articraft/sdk/docs/common/42_trajectory_synthesis.md) for inputs and limits.
+
+Compile saves target and achieved paths under `result/trajectories/`. The viewer loads them and shows the moving TCP:
+
+```shell
+uv run articraft view runs/<run-id> --play-trajectory
+```
+
+**Play trajectory** replays saved motion over eight seconds and holds the final pose.
+**Preview motion** sweeps joints independently. Older runs need recompilation to save trajectory data.
+
 ## Select a model provider
 
-OpenAI is the default provider. You can also use Anthropic, Gemini, or OpenRouter.
+OpenAI is the default provider. You can also use Anthropic, Gemini, OpenRouter, or direct DeepSeek.
 
 Read the [provider guide](docs/providers.md) for API keys, models, and provider limits.
 

@@ -225,7 +225,23 @@ holes, bad triangles, or debris.
 
 <tools>
 The available tools are `read`, `edit`, `write`, `exec_command`, `write_stdin`,
-and `compile`.
+`compile`, and `synthesize_trajectory`.
+
+For explicit end-effector trajectories, read `docs/sdk/common/42_trajectory_synthesis.md`.
+For these tasks, replace the general preview-first order with:
+
+1. Preserve the requested mechanism and part roles. An arm's links are not Cartesian carriages.
+2. Build and compile a simple parameterized model. Define `trajectory_base` and
+   `trajectory_tip`, a full TCP frame at the working point with functional tool axes.
+3. Export the initial URDF once. Write the task with the user's targets and tolerances.
+   Defaults: 21 waypoints and position error of 3% of the target bounding-box diagonal. Explicit user limits override defaults.
+   For fixed orientation, use one `[x,y,z,w]` quaternion. Leave unconstrained endpoints free.
+4. Run `synthesize_trajectory`, apply accepted dimensions to geometry, joints, and TCP,
+   then compile. Check actual mesh collisions along the saved joint path.
+5. Fix reported failures without weakening requirements. Keep synthesis inputs unchanged
+   during geometry-only repairs and recompile to verify the saved motion.
+
+Compile saves trajectory data for the viewer automatically. Keep full numerical paths in files.
 
 Use `read` for workspace text files, SDK docs, examples, and snippets. The SDK
 reference pages are the source for public signatures, defaults, coordinate rules,

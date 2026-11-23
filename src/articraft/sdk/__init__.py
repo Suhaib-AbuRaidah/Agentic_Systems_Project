@@ -84,6 +84,7 @@ from articraft.sdk.testing import (
     TestMetric,
     TestReport,
 )
+from articraft.sdk.trajectory import export_kinematic_urdf, verify_trajectory
 from articraft.sdk.visual import (
     ImagePoint,
     LineOverlay,
@@ -158,5 +159,7 @@ __all__ = [
     "WirePolylineGeometry",
     "analyze_mesh_health",
     "annotate_image",
+    "export_kinematic_urdf",
     "render_view",
+    "verify_trajectory",
 ]

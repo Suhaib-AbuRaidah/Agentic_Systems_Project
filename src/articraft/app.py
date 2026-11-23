@@ -33,18 +33,19 @@ def generate(
         resolve_path=True,
         help="Local reference image for reconstruction.",
     ),
-    provider: Literal["openai", "gemini", "anthropic", "openrouter"] | None = typer.Option(
+    provider: Literal["openai", "gemini", "anthropic", "openrouter", "deepseek"]
+    | None = typer.Option(
         None,
         "--provider",
         case_sensitive=False,
-        help="Model provider to use: openai, gemini, anthropic, or openrouter.",
+        help="Model provider to use: openai, gemini, anthropic, openrouter, or deepseek.",
     ),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use."),
     output_dir: Path | None = typer.Option(None, "--output-dir", help="Run output directory."),
     effort: str | None = typer.Option(
         None,
         "--effort",
-        help="OpenAI reasoning effort.",
+        help="Reasoning effort for OpenAI or DeepSeek (none, low, high, max for DeepSeek).",
     ),
     compile_timeout: float | None = typer.Option(
         None,
@@ -117,10 +118,13 @@ def view(
         ..., help="Run id under the output directory, or a path to a run directory."
     ),
     output_dir: Path | None = typer.Option(None, "--output-dir", help="Run output directory."),
+    play_trajectory: bool = typer.Option(
+        False, "--play-trajectory", help="Play the saved trajectory when the viewer opens."
+    ),
 ) -> None:
-    """Open the articulated USDZ outputs for a run."""
+    """Open a run's USDZ outputs and any saved end-effector trajectory."""
     try:
-        serve_viewer(_resolve_run_dir(run, output_dir))
+        serve_viewer(_resolve_run_dir(run, output_dir), play_trajectory=play_trajectory)
     except (OSError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from None
@@ -304,7 +308,7 @@ def _default_output_dir() -> Path:
 
 
 def _settings(
-    provider: Literal["openai", "gemini", "anthropic", "openrouter"] | None,
+    provider: Literal["openai", "gemini", "anthropic", "openrouter", "deepseek"] | None,
     model: str | None,
     output_dir: Path | None,
     effort: str | None,

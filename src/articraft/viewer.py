@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import re
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
@@ -33,6 +34,7 @@ from articraft.sdk.physics import PhysicsScene
 class ViewerRun:
     versions: tuple[dict[str, object], ...]
     files: dict[str, Path]
+    trajectories: dict[str, Path] = field(default_factory=dict)
 
     def bootstrap(self) -> dict[str, object]:
         return {"versions": self.versions}
@@ -51,7 +53,22 @@ def load_viewer_run(run_dir: Path | str) -> ViewerRun:
 
     versions = tuple(_read_version(path) | _read_trajectory(run_dir, path) for path in paths)
     files = {str(version["id"]): path for version, path in zip(versions, paths, strict=True)}
-    return ViewerRun(versions=versions, files=files)
+    trajectories: dict[str, Path] = {}
+    for version, path in zip(versions, paths, strict=True):
+        trajectory = run_dir / "result" / "trajectories" / f"{path.stem}.json"
+        if not trajectory.is_file():
+            continue
+        try:
+            payload = json.loads(trajectory.read_text(encoding="utf-8"))
+            if payload.get("usdz_sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+                continue
+            if payload.get("schema_version") != 1:
+                continue
+        except (OSError, ValueError, AttributeError):
+            continue
+        trajectories[path.stem] = trajectory
+        version["end_effector_trajectory_url"] = f"/api/trajectories/{path.stem}"
+    return ViewerRun(versions=versions, files=files, trajectories=trajectories)
 
 
 def _read_trajectory(run_dir: Path, usdz: Path) -> dict[str, object]:
@@ -66,11 +83,20 @@ def _read_trajectory(run_dir: Path, usdz: Path) -> dict[str, object]:
         return {}
 
 
-def serve_viewer(run_dir: Path | str, *, open_browser: bool = True) -> None:
+def serve_viewer(
+    run_dir: Path | str, *, open_browser: bool = True, play_trajectory: bool = False
+) -> None:
     viewer_run = load_viewer_run(run_dir)
+    if play_trajectory and str(viewer_run.versions[0]["id"]) not in viewer_run.trajectories:
+        raise ValueError(
+            "the latest object has no saved trajectory to play; "
+            "recompile the trajectory run to save its joint path"
+        )
     page = (package_dir / "viewer.html").read_bytes()
-    bootstrap = json.dumps(viewer_run.bootstrap(), separators=(",", ":")).encode()
-    handler = _handler(page, bootstrap, viewer_run.files)
+    bootstrap = json.dumps(
+        viewer_run.bootstrap() | {"play_trajectory": play_trajectory}, separators=(",", ":")
+    ).encode()
+    handler = _handler(page, bootstrap, viewer_run.files, viewer_run.trajectories)
 
     with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
         url = f"http://127.0.0.1:{server.server_port}/"
@@ -450,6 +476,7 @@ def _handler(
     page: bytes,
     bootstrap: bytes,
     files: dict[str, Path],
+    trajectories: dict[str, Path] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     solvers: dict[str, ResolvedRigidBodyAssembly | None] = {}
 
@@ -489,6 +516,11 @@ def _handler(
                 return
             if route == "/api/bootstrap":
                 self._send(200, "application/json", bootstrap)
+                return
+            match = re.fullmatch(r"/api/trajectories/(\d+)", route)
+            trajectory = (trajectories or {}).get(match.group(1)) if match else None
+            if trajectory is not None:
+                self._send(200, "application/json", trajectory.read_bytes())
                 return
             match = re.fullmatch(r"/models/(\d+)\.usdz", route)
             path = files.get(match.group(1)) if match else None

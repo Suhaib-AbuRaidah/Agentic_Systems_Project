@@ -57,6 +57,20 @@ def test_create_run_seeds_an_editable_scaffold_and_docs(tmp_path) -> None:
     assert Record.load(run_dir / "record.json") == Record(run_id="seeded")
 
 
+def test_cold_worker_requires_trajectory_frames_after_synthesis_registration(tmp_path) -> None:
+    env = LocalWorkspace(output_dir=tmp_path)
+    run_dir = env.create_run("trajectory-contract")
+    (run_dir / "trajectory_request.json").write_text(
+        json.dumps({"task": "trajectory_task.json", "output": "trajectory_output/missing"})
+    )
+
+    result = env.compile_path(run_dir)
+
+    assert result["status"] == "error"
+    assert "main.py must define trajectory_base" in result["error"]
+    assert "verifying rebuilt end-effector trajectory" in result["compile_stats"]["phases"]
+
+
 def test_compile_path_exports_usdz_but_only_updates_attempt_data(tmp_path) -> None:
     env = LocalWorkspace(output_dir=tmp_path)
     run_dir = env.create_run("box")

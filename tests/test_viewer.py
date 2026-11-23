@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import runpy
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -12,7 +16,7 @@ from typing import Any, cast
 import pytest
 from build123d import Box
 
-from articraft import package_dir
+from articraft import package_dir, viewer
 from articraft.sdk import (
     JointAxis,
     JointDOF,
@@ -192,7 +196,9 @@ def test_viewer_page_exposes_only_the_minimal_view_options() -> None:
     # Only shown once a run has been simulated; the option list stays enumerated
     # here so it cannot creep.
     assert 'id="play-simulation"' in page
-    assert page.count('role="switch"') == 3
+    assert 'id="show-trajectory"' in page
+    assert 'id="play-trajectory"' in page
+    assert page.count('role="switch"') == 5
     assert "contrastingPalette(version.model.parts.length)" in page
     assert "index%palette.length" not in page
 
@@ -278,7 +284,7 @@ def _loop_model() -> RigidBodyAssembly:
 def _serve(run):
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0),
-        _handler(b"", json.dumps(run.bootstrap()).encode(), run.files),
+        _handler(b"", json.dumps(run.bootstrap()).encode(), run.files, run.trajectories),
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -353,3 +359,229 @@ def test_a_tree_model_still_poses_in_the_browser(tmp_path) -> None:
 
     assert model["can_pose"] is True
     assert model["solver"] == "tree"
+
+
+def test_viewer_fetches_the_saved_trajectory_for_the_matching_object(tmp_path) -> None:
+    run_dir = tmp_path / "path-run"
+    exported = export_assembly(_revolute_model(), run_dir / "result")
+    folder = run_dir / "result" / "trajectories"
+    folder.mkdir()
+    snapshot = folder / "0000.json"
+    payload = {
+        "schema_version": 1,
+        "usdz_sha256": hashlib.sha256(exported.usdz.read_bytes()).hexdigest(),
+        "base_body": "base",
+        "target_positions_m": [[0, 0, 0], [0.1, 0, 0]],
+        "achieved_positions_m": [[0, 0, 0], [0.1, 0.001, 0]],
+        "tcp": {"body": "door", "xyz_m": [0, 0, 0.1], "rpy_rad": [0, 0, 0.2]},
+    }
+    snapshot.write_text(json.dumps(payload))
+    run = load_viewer_run(run_dir)
+    server = _serve(run)
+    try:
+        url = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(url + "/api/trajectories/0000") as response:
+            assert response.headers.get_content_type() == "application/json"
+            assert json.load(response) == payload
+        with pytest.raises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen(url + "/api/trajectories/9999")
+        assert missing.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+    payload["usdz_sha256"] = "old-model-hash"
+    snapshot.write_text(json.dumps(payload))
+    assert not load_viewer_run(run_dir).trajectories
+    snapshot.write_text("not JSON")
+    assert not load_viewer_run(run_dir).trajectories
+
+
+@pytest.mark.parametrize("play_trajectory", [False, True])
+def test_viewer_passes_playback_option_to_browser(monkeypatch, tmp_path, play_trajectory) -> None:
+    run = viewer.ViewerRun(
+        versions=({"id": "0000"},), files={}, trajectories={"0000": tmp_path / "0000.json"}
+    )
+    monkeypatch.setattr(viewer, "load_viewer_run", lambda _: run)
+    captured = {}
+
+    def handler(page, bootstrap, files, trajectories):
+        captured.update(json.loads(bootstrap))
+
+    class Server:
+        server_port = 12345
+
+        def __init__(self, address, handler):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def serve_forever(self):
+            pass
+
+    monkeypatch.setattr(viewer, "_handler", handler)
+    monkeypatch.setattr(viewer, "ThreadingHTTPServer", Server)
+    viewer.serve_viewer(tmp_path, open_browser=False, play_trajectory=play_trajectory)
+
+    assert captured["play_trajectory"] is play_trajectory
+    assert captured["versions"] == [{"id": "0000"}]
+
+
+def test_viewer_reports_missing_trajectory_when_playback_requested(monkeypatch, tmp_path) -> None:
+    run = viewer.ViewerRun(versions=({"id": "0000"},), files={})
+    monkeypatch.setattr(viewer, "load_viewer_run", lambda _: run)
+
+    with pytest.raises(ValueError, match="no saved trajectory to play"):
+        viewer.serve_viewer(tmp_path, open_browser=False, play_trajectory=True)
+
+
+def test_viewer_replays_synchronized_joint_path() -> None:
+    """Execute the actual playback functions without requiring a browser or CDN."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is needed to exercise viewer JavaScript")
+    page = (package_dir / "viewer.html").read_text(encoding="utf-8")
+    names = (
+        "canPlayTrajectory",
+        "animateTrajectory",
+        "setPlayingTrajectory",
+        "setPlayingSimulation",
+        "setPlayingSimulationOff",
+        "setPreviewMotion",
+        "reset",
+    )
+    functions = []
+    for name in names:
+        match = re.search(
+            rf"^    function {name}\(.*?(?=^    (?:async )?function |\Z)",
+            page,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None, name
+        functions.append(match.group())
+    script = (
+        """
+import assert from 'node:assert/strict';
+const state = {
+  version: {model: {can_pose: true, solver: 'tree'}},
+  joints: new Map([
+    ['slide', {spec: {type: 'prismatic'}, value: 99, input: {}, current: {}}],
+    ['wrist', {spec: {type: 'revolute'}, value: 99, input: {}, current: {}}],
+  ]),
+  endEffectorTrajectory: {
+    joint_order: ['slide', 'wrist'], joint_path: [[0, 6], [.1, 7], [.4, 8]],
+  },
+  previewMotion: true, playingSimulation: true, playingTrajectory: false,
+};
+const poses = [];
+function poseTree() { poses.push([...state.joints.values()].map(joint => joint.value)); }
+function renderTree() {}
+function syncOptions() {}
+function format(spec, value) { return String(value); }
+"""
+        + "\n".join(functions)
+        + """
+assert.equal(canPlayTrajectory(), true);
+setPlayingTrajectory(true);
+assert.equal(state.playingTrajectory, true);
+assert.equal(state.previewMotion, false);
+assert.equal(state.playingSimulation, false);
+assert.deepEqual(poses.at(-1), [0, 6]);
+animateTrajectory(2);
+assert.deepEqual(poses.at(-1), [.05, 6.5]);
+assert.equal(state.joints.get('slide').input.value, '0.05');
+assert.equal(state.joints.get('wrist').current.textContent, '6.5');
+animateTrajectory(4);
+assert.deepEqual(poses.at(-1), [.1, 7]);
+animateTrajectory(9);
+assert.deepEqual(poses.at(-1), [.4, 8]); // no angle wrapping or jump back
+assert.equal(state.playingTrajectory, false);
+setPlayingTrajectory(true);
+assert.deepEqual(poses.at(-1), [0, 6]); // click again to restart
+setPreviewMotion(true);
+assert.equal(state.playingTrajectory, false);
+setPlayingTrajectory(true);
+setPlayingSimulation(true);
+assert.equal(state.playingTrajectory, false);
+setPlayingTrajectory(true);
+reset();
+assert.deepEqual(poses.at(-1), [0, 0]);
+assert.equal(state.playingTrajectory, false);
+assert.equal(state.previewMotion, false);
+assert.equal(state.playingSimulation, false);
+const data = state.endEffectorTrajectory;
+for (const invalid of [null, {...data, joint_order: ['missing']},
+    {...data, joint_path: [[0, 1], [2]]},
+    {...data, joint_path: [[0, 1], [2, Infinity]]}]) {
+  state.endEffectorTrajectory = invalid;
+  assert.equal(canPlayTrajectory(), false);
+  setPlayingTrajectory(true);
+  assert.equal(state.playingTrajectory, false);
+}
+state.endEffectorTrajectory = data;
+state.version.model.solver = 'server';
+assert.equal(canPlayTrajectory(), false);
+"""
+    )
+    subprocess.run([node, "--input-type=module", "-"], input=script, text=True, check=True)
+
+
+def test_viewer_attaches_tcp_marker_to_tool_with_full_local_frame() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is needed to exercise viewer JavaScript")
+    page = (package_dir / "viewer.html").read_text(encoding="utf-8")
+    functions = []
+    for name in ("attachTCPMarker", "setShowTrajectory"):
+        match = re.search(
+            rf"^    function {name}\(.*?(?=^    (?:async )?function |\Z)",
+            page,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        functions.append(match.group())
+    script = (
+        """
+import assert from 'node:assert/strict';
+class Group {
+  children = [];
+  add(object) { object.parent = this; this.children.push(object); }
+  traverse(visit) { visit(this); for (const child of this.children) visit(child); }
+}
+const THREE = {
+  Group,
+  AxesHelper: class {},
+  SphereGeometry: class {},
+  MeshBasicMaterial: class { constructor(values) { Object.assign(this, values); } },
+  Mesh: class { constructor(geometry, material) { this.material = material; } },
+};
+const tool = new Group(), base = new Group(), legend = {};
+const state = {parts: new Map([['gripper', {node: tool}], ['base', {node: base}]]),
+  showTrajectory: true, trajectoryGroup: {visible: true}};
+const document = {querySelector: selector => legend};
+function materials(object) { return [object.material]; }
+function jointFrame(frame) { return frame; }
+function applyMatrix(node, frame) { node.localFrame = frame; }
+function syncOptions() {}
+"""
+        + "\n".join(functions)
+        + """
+const tcp = {body: 'gripper', xyz_m: [0, .065, .0065], rpy_rad: [0, 0, Math.PI / 2],
+  description: 'Between finger tips', axes: {x: 'Along fingers', y: 'Across jaws', z: 'Palm normal'}};
+attachTCPMarker(tcp);
+assert.equal(state.tcpMarker.parent, tool); // follows the moving tool, not the base overlay
+assert.equal(base.children.length, 0);
+assert.deepEqual(state.tcpMarker.localFrame, {xyz: tcp.xyz_m, rpy: tcp.rpy_rad});
+assert.equal(state.tcpMarker.children.length, 2); // point and orientation axes
+assert.match(legend.title, /Between finger tips/);
+assert.match(legend.title, /X: Along fingers/);
+setShowTrajectory(false);
+assert.equal(state.tcpMarker.visible, false);
+setShowTrajectory(true);
+assert.equal(state.tcpMarker.visible, true);
+"""
+    )
+    subprocess.run([node, "--input-type=module", "-"], input=script, text=True, check=True)
