@@ -103,6 +103,13 @@ uv run articraft view runs/<run-id> --play-trajectory
 **Play trajectory** replays saved motion over eight seconds and holds the final pose.
 **Preview motion** sweeps joints independently. Older runs need recompilation to save trajectory data.
 
+## Synthesize a planar linkage
+
+For a closed-loop planar mechanism, specify a point path, pose sequence, or
+prescribed joint motion. The agent can fit dimensions while preserving the loop
+and verify the saved motion on the rebuilt model. See the
+[planar synthesis reference](src/articraft/sdk/docs/common/43_planar_synthesis.md).
+
 ## Select a model provider
 
 OpenAI is the default provider. You can also use Anthropic, Gemini, OpenRouter, or direct DeepSeek.

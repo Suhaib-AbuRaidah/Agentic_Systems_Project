@@ -149,6 +149,7 @@ def test_agent_writes_compiles_and_returns_final_response(tmp_path) -> None:
         "write_stdin",
         "compile",
         "synthesize_trajectory",
+        "synthesize_planar_mechanism",
     }
 
 

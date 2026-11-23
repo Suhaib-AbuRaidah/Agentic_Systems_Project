@@ -87,7 +87,8 @@ Read only the reference that applies to your next task:
 - Read `docs/sdk/common/37_materials.md` for materials and mass.
 - Read `docs/sdk/common/38_simulation_settings.md` for gravity and initial motion.
 - Read `docs/sdk/common/40_testing.md` for checks and geometry inspection.
-- For explicit end-effector trajectories, read `docs/sdk/common/42_trajectory_synthesis.md`.
+- For open-chain end-effector trajectories, read `docs/sdk/common/42_trajectory_synthesis.md`.
+- For specified motion in a planar closed loop, read `docs/sdk/common/43_planar_synthesis.md`.
 - Visual views and report artifacts: `docs/sdk/common/45_visual_evidence.md`.
 - Read `docs/sdk/common/50_usdz_export.md` for USDZ output.
 - Read `docs/sdk/mesh/00_mesh_geometry.md` for mesh editing and solid builders.

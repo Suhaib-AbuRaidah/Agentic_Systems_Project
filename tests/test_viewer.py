@@ -445,8 +445,14 @@ def test_viewer_replays_synchronized_joint_path() -> None:
         pytest.skip("Node.js is needed to exercise viewer JavaScript")
     page = (package_dir / "viewer.html").read_text(encoding="utf-8")
     names = (
+        "cancelPose",
+        "poseOnServer",
+        "move",
+        "animateMotion",
         "canPlayTrajectory",
         "animateTrajectory",
+        "applyBodyFrame",
+        "updateDOFs",
         "setPlayingTrajectory",
         "setPlayingSimulation",
         "setPlayingSimulationOff",
@@ -456,7 +462,7 @@ def test_viewer_replays_synchronized_joint_path() -> None:
     functions = []
     for name in names:
         match = re.search(
-            rf"^    function {name}\(.*?(?=^    (?:async )?function |\Z)",
+            rf"^    (?:async )?function {name}\(.*?(?=^    (?:async )?function |\Z)",
             page,
             flags=re.MULTILINE | re.DOTALL,
         )
@@ -466,10 +472,11 @@ def test_viewer_replays_synchronized_joint_path() -> None:
         """
 import assert from 'node:assert/strict';
 const state = {
-  version: {model: {can_pose: true, solver: 'tree'}},
+  version: {id: '0001', model: {can_pose: true, solver: 'tree'}},
+  poseToken: 0, solving: false, pendingPose: null, parts: new Map(),
   joints: new Map([
-    ['slide', {spec: {type: 'prismatic'}, value: 99, input: {}, current: {}}],
-    ['wrist', {spec: {type: 'revolute'}, value: 99, input: {}, current: {}}],
+    ['slide', {spec: {name: 'slide', type: 'prismatic', previewable: true}, value: 99, input: {}, current: {}}],
+    ['wrist', {spec: {name: 'wrist', type: 'revolute', previewable: true}, value: 99, input: {}, current: {}}],
   ]),
   endEffectorTrajectory: {
     joint_order: ['slide', 'wrist'], joint_path: [[0, 6], [.1, 7], [.4, 8]],
@@ -481,6 +488,13 @@ function poseTree() { poses.push([...state.joints.values()].map(joint => joint.v
 function renderTree() {}
 function syncOptions() {}
 function format(spec, value) { return String(value); }
+function status() {}
+function motionValue() { return .25; }
+const requests = [];
+globalThis.fetch = async (url, options) => {
+  requests.push(JSON.parse(options.body));
+  return {ok: true, json: async () => ({bodies: {}, dofs: {'wrist.rotZ': 1.5, 'slide.transX': .25}})};
+};
 """
         + "\n".join(functions)
         + """
@@ -524,6 +538,27 @@ for (const invalid of [null, {...data, joint_order: ['missing']},
 state.endEffectorTrajectory = data;
 state.version.model.solver = 'server';
 assert.equal(canPlayTrajectory(), false);
+move('wrist', 1.5);
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(requests.at(-1), {wrist: 1.5});
+assert.equal(state.joints.get('slide').value, .25);
+animateMotion(1);
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(requests.at(-1), {slide: .25});
+const shown = [];
+state.parts.set('link', {node: {position: {set: (...p) => shown.push(p)},
+  quaternion: {set() {}}, updateMatrix() {}}});
+state.endEffectorTrajectory = {body_frames: [0, 1].map(x => ({
+  bodies: {link: {pos: [x, 0, 0], quat: [1, 0, 0, 0]}},
+  dofs: {'slide.transX': x},
+}))};
+const requestCount = requests.length;
+assert.equal(canPlayTrajectory(), true);
+setPlayingTrajectory(true);
+animateTrajectory(8);
+assert.deepEqual(shown, [[0, 0, 0], [1, 0, 0]]);
+assert.equal(state.joints.get('slide').value, 1);
+assert.equal(requests.length, requestCount);
 """
     )
     subprocess.run([node, "--input-type=module", "-"], input=script, text=True, check=True)

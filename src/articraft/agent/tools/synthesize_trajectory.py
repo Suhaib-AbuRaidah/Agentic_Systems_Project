@@ -1,27 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
 import math
-import os
-import signal
 import sys
 import uuid
 from typing import Any
 
-from articraft.agent._child_process import child_environment
 from articraft.agent.tools._core import Tool, ToolContext, schema, workspace_path
-
-
-async def _relay(stream: asyncio.StreamReader) -> str:
-    tail: list[str] = []
-    while line := await stream.readline():
-        text = line.decode(errors="replace").rstrip()
-        print(text, file=sys.stderr, flush=True)
-        tail.append(text[:2000])
-        tail = tail[-30:]
-    return "\n".join(tail)
+from articraft.agent.tools._solver_worker import run_solver_worker
 
 
 async def run(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
@@ -64,66 +50,24 @@ async def run(context: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         file=sys.stderr,
         flush=True,
     )
-    spawning = asyncio.create_task(
-        asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "articraft.agent.workspace.synthesis_worker",
-            str(task),
-            str(output),
-            str(subdivisions),
-            cwd=root,
-            env=child_environment(),
-            start_new_session=True,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    response = await run_solver_worker(
+        "articraft.agent.workspace.synthesis_worker",
+        root,
+        output / "result.json",
+        timeout,
+        str(task),
+        str(output),
+        str(subdivisions),
     )
-    cancelled = False
-    while True:
-        try:
-            proc = await asyncio.shield(spawning)
-            break
-        except asyncio.CancelledError:
-            # Finish spawning so cancellation can kill the child we own.
-            cancelled = True
-    assert proc.stdout is not None and proc.stderr is not None
-    stdout = asyncio.create_task(proc.stdout.read())
-    stderr = asyncio.create_task(_relay(proc.stderr))
-
-    async def collect() -> tuple[bytes, str]:
-        # Drain both pipes before waiting for exit. In particular, never leave
-        # the child waiting on its own verbose stderr while we await proc.wait().
-        raw, errors = await asyncio.gather(stdout, stderr)
-        await proc.wait()
-        return raw, errors
-
-    collected = asyncio.create_task(collect())
-    try:
-        if cancelled:
-            raise asyncio.CancelledError
-        raw, errors = await asyncio.wait_for(asyncio.shield(collected), timeout=timeout)
-    except (TimeoutError, asyncio.CancelledError) as exc:
-        cancelled = cancelled or isinstance(exc, asyncio.CancelledError)
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(proc.pid, signal.SIGKILL)
-        while True:
-            try:
-                await asyncio.shield(collected)
-                break
-            except asyncio.CancelledError:
-                cancelled = True
-        (output / "result.json").unlink(missing_ok=True)
-        if cancelled:
-            raise asyncio.CancelledError from None
+    if response is None:
         print(
             "[trajectory] Solver timed out; final compile remains blocked",
             file=sys.stderr,
             flush=True,
         )
         return {"status": "error", "error": "trajectory synthesis timed out", "timed_out": True}
-    if proc.returncode != 0:
+    returncode, raw, errors = response
+    if returncode != 0:
         (output / "result.json").unlink(missing_ok=True)
         return {"status": "error", "error": "trajectory worker failed", "details": errors}
     try:

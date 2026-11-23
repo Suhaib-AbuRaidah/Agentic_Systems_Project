@@ -202,39 +202,57 @@ def _compile_workspace(
             tracker.set_model(object_model)
             with tracker.phase("running authored tests"):
                 authored_report = _run_required_tests(globals_dict)
+            request_path = workspace.parent / "trajectory_request.json"
+            request = json.loads(request_path.read_text()) if request_path.is_file() else None
+            is_planar = request is not None and request.get("kind") == "planar"
             baseline_report = _run_baseline_tests(
                 object_model,
                 authored_report,
                 tracker=tracker,
                 physics_enabled=physics_enabled,
+                sweep_articulation=not is_planar,
             )
-            request_path = workspace.parent / "trajectory_request.json"
-            if request_path.is_file():
-                with tracker.phase("verifying rebuilt end-effector trajectory"):
-                    from articraft.sdk.trajectory import verify_trajectory
-
-                    request = json.loads(request_path.read_text())
+            if request is not None:
+                phase = (
+                    "verifying rebuilt planar linkage"
+                    if is_planar
+                    else "verifying rebuilt end-effector trajectory"
+                )
+                with tracker.phase(phase):
                     task_path = (workspace / request["task"]).resolve()
                     output_path = (workspace / request["output"]).resolve()
                     task_path.relative_to(workspace.resolve())
                     output_path.relative_to(workspace.resolve())
-                    if (
-                        "trajectory_base" not in globals_dict
-                        or "trajectory_tip" not in globals_dict
-                    ):
-                        raise ValueError(
-                            "After synthesis, main.py must define trajectory_base (a rigid body) "
-                            "and trajectory_tip (a BodyFrame) from the rebuilt geometry"
-                        )
                     trajectory_ctx = TestContext(object_model)
-                    verify_trajectory(
-                        trajectory_ctx,
-                        task_path,
-                        output_path,
-                        base=globals_dict["trajectory_base"],
-                        tip=globals_dict["trajectory_tip"],
-                        preview_path=trajectory_preview,
-                    )
+                    if is_planar:
+                        from articraft.sdk.planar import verify_planar_motion
+
+                        verify_planar_motion(
+                            trajectory_ctx,
+                            task_path,
+                            output_path / "result.json",
+                            globals_dict.get("planar_targets", ()),
+                            preview_path=trajectory_preview,
+                        )
+                    else:
+                        from articraft.sdk.trajectory import verify_trajectory
+
+                        if (
+                            "trajectory_base" not in globals_dict
+                            or "trajectory_tip" not in globals_dict
+                        ):
+                            raise ValueError(
+                                "After synthesis, main.py must define trajectory_base (a rigid body) "
+                                "and trajectory_tip (a BodyFrame) from the rebuilt geometry"
+                            )
+                        verify_trajectory(
+                            trajectory_ctx,
+                            task_path,
+                            output_path,
+                            base=globals_dict["trajectory_base"],
+                            tip=globals_dict["trajectory_tip"],
+                            preview_path=trajectory_preview,
+                        )
                     baseline_report = _merge_test_reports(baseline_report, trajectory_ctx.report())
             test_report = _merge_test_reports(authored_report, baseline_report)
             result.test_report = _serialize_test_report(
@@ -330,6 +348,7 @@ def _run_baseline_tests(
     *,
     tracker: _CompileTracker,
     physics_enabled: bool = False,
+    sweep_articulation: bool = True,
 ) -> TestReport:
     ctx = TestContext(obj)
     for part_name in authored_report.allowed_isolated_parts:
@@ -372,8 +391,11 @@ def _run_baseline_tests(
         ctx.warn_if_absurd_dimensions()
     with tracker.phase("checking for part overlaps"):
         ctx.fail_if_parts_overlap_in_current_pose()
-    with tracker.phase("checking articulation motion"):
-        ctx.fail_if_articulation_separates_child()
+    # Planar synthesis verifies coupled poses below. An independent joint
+    # sweep may leave the attainable branch or violate another joint's limits.
+    if sweep_articulation:
+        with tracker.phase("checking articulation motion"):
+            ctx.fail_if_articulation_separates_child()
     report = _without_allowance_notes(ctx.report())
     # Most baseline checks report as diagnostics so a run still produces a model.
     # Missing mass is different: with the physics lane on, a part without mass has

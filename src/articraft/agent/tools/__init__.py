@@ -7,6 +7,7 @@ from articraft.agent.tools.compile import TOOL as compile_tool
 from articraft.agent.tools.edit import TOOL as edit_tool
 from articraft.agent.tools.exec_command import TOOL as exec_command_tool
 from articraft.agent.tools.read import TOOL as read_tool
+from articraft.agent.tools.synthesize_planar_mechanism import TOOL as synthesize_planar_tool
 from articraft.agent.tools.synthesize_trajectory import TOOL as synthesize_trajectory_tool
 from articraft.agent.tools.view_image import TOOL as view_image_tool
 from articraft.agent.tools.write import TOOL as write_tool
@@ -23,6 +24,7 @@ TOOLS: dict[str, Tool[Any]] = {
         write_stdin_tool,
         compile_tool,
         synthesize_trajectory_tool,
+        synthesize_planar_tool,
     )
 }
 
@@ -38,7 +40,14 @@ def get(name: Literal["view_image"]) -> Tool[ToolResult]: ...
 @overload
 def get(
     name: Literal[
-        "read", "edit", "write", "exec_command", "write_stdin", "compile", "synthesize_trajectory"
+        "read",
+        "edit",
+        "write",
+        "exec_command",
+        "write_stdin",
+        "compile",
+        "synthesize_trajectory",
+        "synthesize_planar_mechanism",
     ],
 ) -> Tool[dict[str, Any]]: ...
 

@@ -90,7 +90,7 @@ def serve_viewer(
     if play_trajectory and str(viewer_run.versions[0]["id"]) not in viewer_run.trajectories:
         raise ValueError(
             "the latest object has no saved trajectory to play; "
-            "recompile the trajectory run to save its joint path"
+            "recompile the trajectory run to save its motion"
         )
     page = (package_dir / "viewer.html").read_bytes()
     bootstrap = json.dumps(

@@ -568,7 +568,7 @@ def _tool_label(call: dict[str, Any]) -> str:
     target = ""
     if name in {"read", "write", "edit", "view_image"}:
         target = str(args.get("path") or "")
-    elif name == "synthesize_trajectory":
+    elif name in {"synthesize_trajectory", "synthesize_planar_mechanism"}:
         target = str(args.get("task_path") or "")
     elif name == "exec_command":
         lines = str(args.get("command") or "").splitlines()

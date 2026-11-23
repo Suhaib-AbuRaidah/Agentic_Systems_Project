@@ -83,7 +83,7 @@
     import { USDLoader } from "three/addons/loaders/USDLoader.js";
     import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
-    const state={data:null,version:null,root:null,parts:new Map(),joints:new Map(),palette:[],selected:null,partColors:false,previewMotion:false,previewStartedAt:0,simulation:null,playingSimulation:false,simulationStartedAt:0,trajectoryGroup:null,tcpMarker:null,showTrajectory:true,endEffectorTrajectory:null,playingTrajectory:false,trajectoryStartedAt:0};
+    const state={data:null,version:null,root:null,parts:new Map(),joints:new Map(),palette:[],selected:null,partColors:false,previewMotion:false,previewStartedAt:0,simulation:null,playingSimulation:false,simulationStartedAt:0,trajectoryGroup:null,tcpMarker:null,showTrajectory:true,endEffectorTrajectory:null,playingTrajectory:false,trajectoryStartedAt:0,poseToken:0,solving:false,pendingPose:null};
     const preview={minimumCycle:2.6,linearSpeed:.08,angularSpeed:Math.PI/4,continuousSpeed:Math.PI/5};
     const scene=new THREE.Scene(); scene.background=new THREE.Color(0xe9eef5);
     const camera=new THREE.PerspectiveCamera(38,1,.001,1000); camera.up.set(0,0,1);
@@ -108,7 +108,7 @@
 
     function renderVersions(){document.querySelector("#versions").innerHTML=state.data.versions.map(version=>`<button class="version ${version===state.version?"active":""}" data-id="${esc(version.id)}" ${version===state.version?'aria-current="true"':""}>${esc(version.filename)}</button>`).join("");document.querySelectorAll("[data-id]").forEach(button=>button.addEventListener("click",()=>load(state.data.versions.find(version=>version.id===button.dataset.id))));}
 
-    async function load(version){const loadId=++serial;state.version=version;state.simulation=version.trajectory??null;state.playingSimulation=false;state.previewMotion=false;state.playingTrajectory=false;state.endEffectorTrajectory=null;state.trajectoryGroup=null;state.tcpMarker=null;state.palette=contrastingPalette(version.model.parts.length);state.selected=null;renderVersions();status(`Loading ${version.filename}`);if(state.root){scene.remove(state.root);dispose(state.root);state.root=null;}state.parts.clear();state.joints.clear();syncOptions();try{const usd=await new USDLoader().loadAsync(`/models/${encodeURIComponent(version.id)}.usdz`);if(loadId!==serial){dispose(usd);return;}state.root=robot(usd,version.model);scene.add(state.root);await loadEndEffectorTrajectory(version,loadId);if(loadId!==serial)return;renderParts();renderTree();paint();fit();syncOptions();status("");if(state.data.play_trajectory&&canPlayTrajectory())setPlayingTrajectory(true);}catch(error){console.error(error);status(`Could not load ${version.filename}`);}}
+    async function load(version){const loadId=++serial;cancelPose();state.version=version;state.simulation=version.trajectory??null;state.playingSimulation=false;state.previewMotion=false;state.playingTrajectory=false;state.endEffectorTrajectory=null;state.trajectoryGroup=null;state.tcpMarker=null;state.palette=contrastingPalette(version.model.parts.length);state.selected=null;renderVersions();status(`Loading ${version.filename}`);if(state.root){scene.remove(state.root);dispose(state.root);state.root=null;}state.parts.clear();state.joints.clear();syncOptions();try{const usd=await new USDLoader().loadAsync(`/models/${encodeURIComponent(version.id)}.usdz`);if(loadId!==serial){dispose(usd);return;}state.root=robot(usd,version.model);scene.add(state.root);await loadEndEffectorTrajectory(version,loadId);if(loadId!==serial)return;renderParts();renderTree();paint();fit();syncOptions();status("");if(state.data.play_trajectory&&canPlayTrajectory())setPlayingTrajectory(true);}catch(error){console.error(error);status(`Could not load ${version.filename}`);}}
 
     async function loadEndEffectorTrajectory(version,loadId){
       if(!version.end_effector_trajectory_url)return;
@@ -117,6 +117,7 @@
         if(!response.ok)throw new Error(response.statusText);
         const data=await response.json();
         if(loadId!==serial)return;
+        if(Array.isArray(data.body_frames)){state.endEffectorTrajectory=data;return;}
         const base=state.parts.get(data.base_body);
         if(!base)throw new Error(`Missing trajectory base ${data.base_body}`);
         const group=new THREE.Group();group.name="end_effector_trajectory";
@@ -172,54 +173,55 @@
 
     function paint(){state.version.model.parts.forEach((part,index)=>{const entry=state.parts.get(part.name),color=state.palette[index],visible=!state.selected||state.selected===part.name;entry.meshes.forEach(mesh=>materials(mesh).forEach((material,i)=>{const original=mesh.userData.original[i];if(material.color&&original.color)material.color.copy(state.partColors?color:original.color);material.opacity=state.partColors&&!visible?.12:original.opacity;material.transparent=state.partColors&&!visible||original.transparent;material.depthWrite=state.partColors&&!visible?false:original.depthWrite;material.needsUpdate=true;}));});}
 
-    function renderTree(){const model=state.version.model,byParent=new Map(),children=new Set();model.articulations.forEach(joint=>{if(joint.closes_loop||joint.parent==="WORLD"||joint.child==="WORLD")return;if(!byParent.has(joint.parent))byParent.set(joint.parent,[]);byParent.get(joint.parent).push(joint);children.add(joint.child);});const branch=(name,seen=new Set())=>{if(seen.has(name))return"";const next=new Set(seen).add(name);return`<div class="link"><div class="link-name">${esc(name)}</div><div class="children">${(byParent.get(name)??[]).map(joint=>jointCard(joint)+branch(joint.child,next)).join("")}</div></div>`;};document.querySelector("#tree").innerHTML=model.parts.filter(part=>!children.has(part.name)).map(part=>branch(part.name)).join("");document.querySelectorAll("input[data-joint]").forEach(input=>{const joint=state.joints.get(input.dataset.joint);joint.input=input;joint.current=input.parentElement.querySelector(".current");input.disabled=state.previewMotion||state.playingSimulation||state.playingTrajectory;input.addEventListener("input",()=>{joint.value=Number(input.value);move(input.dataset.joint,joint.value);joint.current.textContent=format(joint.spec,joint.value);});});}
+    function renderTree(){const model=state.version.model,byParent=new Map(),children=new Set();model.articulations.forEach(joint=>{if(joint.closes_loop||joint.parent==="WORLD"||joint.child==="WORLD")return;if(!byParent.has(joint.parent))byParent.set(joint.parent,[]);byParent.get(joint.parent).push(joint);children.add(joint.child);});const branch=(name,seen=new Set())=>{if(seen.has(name))return"";const next=new Set(seen).add(name);return`<div class="link"><div class="link-name">${esc(name)}</div><div class="children">${(byParent.get(name)??[]).map(joint=>jointCard(joint)+branch(joint.child,next)).join("")}</div></div>`;};document.querySelector("#tree").innerHTML=model.parts.filter(part=>!children.has(part.name)).map(part=>branch(part.name)).join("");document.querySelectorAll("input[data-joint]").forEach(input=>{const joint=state.joints.get(input.dataset.joint);joint.input=input;joint.current=input.parentElement.querySelector(".current");input.disabled=state.previewMotion||state.playingSimulation||state.playingTrajectory;input.addEventListener("input",()=>{move(input.dataset.joint,Number(input.value));});});}
 
     function jointCard(joint){const entry=state.joints.get(joint.name),value=entry?.value??0,movable=state.version.model.can_pose&&joint.type!=="fixed"&&!joint.closes_loop&&joint.previewable,limits=joint.motion_limits;let min=0,max=0;if(joint.type==="continuous")[min,max]=[-Math.PI,Math.PI];else if(movable)[min,max]=[limits?.lower??0,limits?.upper??0];return`<div class="joint"><div class="joint-top"><span class="joint-name">${esc(joint.name)}</span><span class="type ${movable?"":"fixed"}">${esc(joint.closes_loop?joint.type+" (loop)":joint.type)}</span></div>${movable?`<input type="range" aria-label="${esc(joint.name)}" data-joint="${esc(joint.name)}" min="${min}" max="${max}" step="any" value="${value}"><div class="values"><span>${format(joint,min)}</span><span class="current">${format(joint,value)}</span><span>${format(joint,max)}</span></div>`:""}</div>`;}
     // A closed loop cannot be posed by walking the tree: driving one joint
     // decides the others, and only the solver knows what they become. The
     // server runs the SDK's own solver so this page cannot drift from it.
-    async function poseOnServer(){
-      if(state.solving){state.queued=true;return;}
-      state.solving=true;state.queued=false;
-      const values={};state.joints.forEach((joint,name)=>{values[name]=joint.value;});
+    function cancelPose(){state.poseToken++;state.pendingPose=null;}
+    async function poseOnServer(joint,value){
+      if(state.solving){state.pendingPose=[joint,value];return;}
+      state.solving=true;
+      const token=state.poseToken;
       try{
-        const response=await fetch(`/api/pose/${state.version.id}`,{method:"POST",body:JSON.stringify(values)});
+        // The other joints must be free to follow the active joint.
+        const response=await fetch(`/api/pose/${state.version.id}`,{method:"POST",body:JSON.stringify({[joint.spec.name]:value})});
+        const solved=await response.json();
+        if(token!==state.poseToken)return;
         if(response.ok){
-          const solved=await response.json();
           for(const[name,flat]of Object.entries(solved.bodies)){
             const entry=state.parts.get(name);
-            // set() takes row major, which is how the server flattens them.
             if(entry)applyMatrix(entry.node,new THREE.Matrix4().set(...flat));
           }
-          // Followers moved too, so their sliders must say so.
-          for(const[dof,value]of Object.entries(solved.dofs)){
-            const joint=state.joints.get(dof.slice(0,dof.lastIndexOf(".")));
-            if(!joint||joint===state.dragging)continue;
-            joint.value=value;
-            if(joint.input)joint.input.value=value;
-            if(joint.current)joint.current.textContent=format(joint.spec,value);
-          }
-          state.lastGood=values;
-        }else if(state.lastGood){
-          // The mechanism cannot reach this pose. Keep the last one it could.
-          for(const[name,value]of Object.entries(state.lastGood)){
-            const joint=state.joints.get(name);
-            if(!joint)continue;
-            joint.value=value;
-            if(joint.input)joint.input.value=value;
-            if(joint.current)joint.current.textContent=format(joint.spec,value);
-          }
+          updateDOFs(solved.dofs);
+          status("");
+        }else{
+          if(joint.input)joint.input.value=String(joint.value);
+          if(!state.previewMotion)status(solved.error??"Could not close the loop at this pose");
         }
-      }catch(error){/* the server went away; leave the last pose on screen */}
-      state.solving=false;
-      if(state.queued)poseOnServer();
+      }catch(error){
+        if(token===state.poseToken&&!state.previewMotion)status("Could not reach the pose solver");
+      }finally{
+        state.solving=false;
+        const pending=state.pendingPose;state.pendingPose=null;
+        if(pending)poseOnServer(...pending);
+      }
     }
-    function move(name,value){const joint=state.joints.get(name);if(!joint)return;joint.value=value;if(state.version?.model.solver==="server"){state.dragging=joint;poseOnServer();}else poseTree();}
+    function move(name,value){const joint=state.joints.get(name);if(!joint)return;if(state.version?.model.solver==="server"){poseOnServer(joint,value);}else{joint.value=value;if(joint.current)joint.current.textContent=format(joint.spec,value);poseTree();}}
     function phaseOffset(name,index){let hash=0;for(const character of name)hash=(hash*33+character.charCodeAt(0))%4096;return THREE.MathUtils.euclideanModulo(hash/4096+index*.61803398875,1);}
     function motionValue(joint,elapsed,index){const limits=joint.spec.motion_limits,lower=limits?.lower,upper=limits?.upper;if(joint.spec.type==="continuous"){const phase=elapsed*preview.continuousSpeed/(Math.PI*2)+phaseOffset(joint.spec.name,index);return THREE.MathUtils.euclideanModulo(phase*Math.PI*2+Math.PI,Math.PI*2)-Math.PI;}const hasRange=Number.isFinite(lower)&&Number.isFinite(upper)&&upper>lower,span=hasRange?upper-lower:joint.spec.type==="prismatic"?.24:Math.PI*2/3,speed=joint.spec.type==="prismatic"?preview.linearSpeed:preview.angularSpeed,cycle=Math.max(preview.minimumCycle,span*2/speed),phase=THREE.MathUtils.euclideanModulo(elapsed/cycle+phaseOffset(joint.spec.name,index),1),wave=.5-.5*Math.cos(phase*Math.PI*2);return hasRange?THREE.MathUtils.lerp(lower,upper,wave):(wave*2-1)*span/2;}
-    function animateMotion(elapsed){let index=0;state.joints.forEach(joint=>{if(joint.spec.type==="fixed")return;const value=motionValue(joint,elapsed,index++);joint.value=value;if(joint.input)joint.input.value=String(value);if(joint.current)joint.current.textContent=format(joint.spec,value);});poseTree();}
+    function animateMotion(elapsed){
+      if(state.version?.model.solver==="server"){
+        const joint=[...state.joints.values()].find(item=>item.spec.type!=="fixed"&&item.spec.previewable);
+        if(joint&&!state.solving)poseOnServer(joint,motionValue(joint,elapsed,0));
+        return;
+      }
+      let index=0;state.joints.forEach(joint=>{if(joint.spec.type==="fixed")return;const value=motionValue(joint,elapsed,index++);joint.value=value;if(joint.input)joint.input.value=String(value);if(joint.current)joint.current.textContent=format(joint.spec,value);});poseTree();
+    }
     function canPlayTrajectory(){
       const data=state.endEffectorTrajectory;
+      if(Array.isArray(data?.body_frames))return data.body_frames.length>=2;
       return Boolean(state.version?.model.can_pose&&state.version.model.solver==="tree"&&
         Array.isArray(data?.joint_order)&&data.joint_order.length&&Array.isArray(data.joint_path)&&data.joint_path.length>=2&&
         data.joint_order.every(name=>state.joints.has(name)&&state.joints.get(name).spec.type!=="fixed")&&
@@ -229,35 +231,58 @@
       const data=state.endEffectorTrajectory;
       // The task has a curve parameter, not necessarily physical time. Replay
       // once over eight seconds and hold the last pose instead of jumping back.
-      const progress=Math.max(0,Math.min(1,elapsed/8)),sample=progress*(data.joint_path.length-1);
-      const lower=Math.floor(sample),upper=Math.min(lower+1,data.joint_path.length-1),alpha=sample-lower;
-      data.joint_order.forEach((name,index)=>{
-        const joint=state.joints.get(name);
-        // Keep the saved unwrapped angular coordinates; never wrap across pi.
-        joint.value=data.joint_path[lower][index]*(1-alpha)+data.joint_path[upper][index]*alpha;
-        if(joint.input)joint.input.value=String(joint.value);
-        if(joint.current)joint.current.textContent=format(joint.spec,joint.value);
-      });
-      poseTree();
+      const progress=Math.max(0,Math.min(1,elapsed/8));
+      if(data.body_frames){
+        // Replay checked complete poses so interpolation cannot open the loop.
+        applyBodyFrame(data.body_frames[Math.round(progress*(data.body_frames.length-1))]);
+      }else{
+        const sample=progress*(data.joint_path.length-1);
+        const lower=Math.floor(sample),upper=Math.min(lower+1,data.joint_path.length-1),alpha=sample-lower;
+        data.joint_order.forEach((name,index)=>{
+          const joint=state.joints.get(name);
+          // Keep the saved unwrapped angular coordinates; never wrap across pi.
+          joint.value=data.joint_path[lower][index]*(1-alpha)+data.joint_path[upper][index]*alpha;
+          if(joint.input)joint.input.value=String(joint.value);
+          if(joint.current)joint.current.textContent=format(joint.spec,joint.value);
+        });
+        poseTree();
+      }
       if(progress===1){state.playingTrajectory=false;renderTree();syncOptions();}
     }
     function setPlayingTrajectory(enabled){
       if(enabled&&!canPlayTrajectory())return;
       state.playingTrajectory=enabled;
-      if(enabled){state.previewMotion=false;state.playingSimulation=false;state.trajectoryStartedAt=performance.now();animateTrajectory(0);}
+      if(enabled){cancelPose();state.previewMotion=false;state.playingSimulation=false;state.trajectoryStartedAt=performance.now();animateTrajectory(0);}
       renderTree();syncOptions();
     }
-    function animateSimulation(elapsed){const sim=state.simulation;if(!sim||!sim.frames.length)return;const span=sim.frames.length/sim.fps,frame=sim.frames[Math.min(sim.frames.length-1,Math.floor((elapsed%span)*sim.fps))];for(const[name,pose]of Object.entries(frame.bodies??{})){const entry=state.parts.get(name);if(!entry)continue;entry.node.position.set(...pose.pos);const[w,x,y,z]=pose.quat;entry.node.quaternion.set(x,y,z,w);entry.node.updateMatrix();}for(const[name,value]of Object.entries(frame.dofs??{})){const joint=state.joints.get(name);if(joint){joint.value=value;if(joint.input)joint.input.value=String(value);if(joint.current)joint.current.textContent=format(joint.spec,value);}}}
+    function updateDOFs(dofs){
+      for(const[name,value]of Object.entries(dofs??{})){
+        const joint=state.joints.get(name)??state.joints.get(name.slice(0,name.lastIndexOf(".")));
+        if(!joint)continue;
+        joint.value=value;
+        if(joint.input)joint.input.value=String(value);
+        if(joint.current)joint.current.textContent=format(joint.spec,value);
+      }
+    }
+    function applyBodyFrame(frame){
+      for(const[name,pose]of Object.entries(frame.bodies??{})){
+        const entry=state.parts.get(name);if(!entry)continue;
+        entry.node.position.set(...pose.pos);const[w,x,y,z]=pose.quat;
+        entry.node.quaternion.set(x,y,z,w);entry.node.updateMatrix();
+      }
+      updateDOFs(frame.dofs);
+    }
+    function animateSimulation(elapsed){const sim=state.simulation;if(!sim||!sim.frames.length)return;const span=sim.frames.length/sim.fps;applyBodyFrame(sim.frames[Math.min(sim.frames.length-1,Math.floor((elapsed%span)*sim.fps))]);}
 
-    function setPlayingSimulation(enabled){state.playingSimulation=enabled;state.simulationStartedAt=performance.now();if(enabled){state.previewMotion=false;state.playingTrajectory=false;}else poseTree();renderTree();syncOptions();}
+    function setPlayingSimulation(enabled){state.playingSimulation=enabled;state.simulationStartedAt=performance.now();if(enabled){cancelPose();state.previewMotion=false;state.playingTrajectory=false;}else poseTree();renderTree();syncOptions();}
 
     function setPlayingSimulationOff(){if(state.playingSimulation)state.playingSimulation=false;}
 
     function syncOptions(){document.querySelector("#part-colors").setAttribute("aria-checked",String(state.partColors));const previewButton=document.querySelector("#preview-motion");previewButton.disabled=!state.version?.model.can_pose;previewButton.setAttribute("aria-checked",String(state.previewMotion));const play=document.querySelector("#play-simulation");play.hidden=!state.simulation;play.setAttribute("aria-checked",String(state.playingSimulation));const path=document.querySelector("#show-trajectory");path.hidden=!state.trajectoryGroup;path.setAttribute("aria-checked",String(state.showTrajectory));document.querySelector("#trajectory-tcp").hidden=!state.tcpMarker;document.querySelector("#trajectory-key").hidden=!state.trajectoryGroup||!state.showTrajectory;const motion=document.querySelector("#play-trajectory");motion.hidden=!state.endEffectorTrajectory;motion.disabled=!canPlayTrajectory();motion.setAttribute("aria-checked",String(state.playingTrajectory));}
     function setShowTrajectory(enabled){state.showTrajectory=enabled;if(state.trajectoryGroup)state.trajectoryGroup.visible=enabled;if(state.tcpMarker)state.tcpMarker.visible=enabled;syncOptions();}
     function setPartColors(enabled){state.partColors=enabled;if(!enabled)state.selected=null;renderParts();paint();syncOptions();}
-    function setPreviewMotion(enabled){if(enabled&&!state.version?.model.can_pose)return;state.previewMotion=enabled;if(enabled){setPlayingSimulationOff();state.playingTrajectory=false;}state.previewStartedAt=performance.now();if(!enabled)poseTree();renderTree();syncOptions();}
-    function reset(){state.previewMotion=false;state.playingSimulation=false;state.playingTrajectory=false;state.joints.forEach(joint=>{joint.value=0;});poseTree();renderTree();syncOptions();}
+    function setPreviewMotion(enabled){if(enabled&&!state.version?.model.can_pose)return;state.previewMotion=enabled;if(enabled){setPlayingSimulationOff();state.playingTrajectory=false;}state.previewStartedAt=performance.now();if(!enabled){cancelPose();if(state.version?.model.solver!=="server")poseTree();}renderTree();syncOptions();}
+    function reset(){cancelPose();state.previewMotion=false;state.playingSimulation=false;state.playingTrajectory=false;state.joints.forEach(joint=>{joint.value=0;});poseTree();renderTree();syncOptions();}
     function fit(){if(!state.root)return;const box=new THREE.Box3().setFromObject(state.root),center=box.getCenter(new THREE.Vector3()),span=Math.max(box.getSize(new THREE.Vector3()).length(),.1);camera.near=span/1000;camera.far=span*100;camera.position.copy(center).add(new THREE.Vector3(span*.95,-span*1.15,span*.8));camera.updateProjectionMatrix();controls.target.copy(center);controls.update();grid.position.z=state.simulation?0:box.min.z-span*.01;grid.scale.setScalar(Math.max(span/5,.02));}
     function dispose(root){root.traverse(object=>{if(object.geometry)object.geometry.dispose();if(object.material)materials(object).forEach(material=>material.dispose());});}
     function status(text){document.querySelector("#status").textContent=text;}

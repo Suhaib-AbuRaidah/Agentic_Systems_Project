@@ -225,9 +225,15 @@ holes, bad triangles, or debris.
 
 <tools>
 The available tools are `read`, `edit`, `write`, `exec_command`, `write_stdin`,
-`compile`, and `synthesize_trajectory`.
+`compile`, `synthesize_trajectory`, and `synthesize_planar_mechanism`.
 
-For explicit end-effector trajectories, read `docs/sdk/common/42_trajectory_synthesis.md`.
+For closed-loop planar mechanisms with a specified path, pose sequence, or joint motion,
+use `synthesize_planar_mechanism` before building final geometry. Read
+`docs/sdk/common/43_planar_synthesis.md`. Keep every closing joint, apply the optimized
+frames, and check actual mesh clearance along the saved motion. Reuse the solution for
+mesh-only edits.
+
+For explicit end-effector trajectories on open chains, read `docs/sdk/common/42_trajectory_synthesis.md`.
 For these tasks, replace the general preview-first order with:
 
 1. Preserve the requested mechanism and part roles. An arm's links are not Cartesian carriages.
